@@ -40,7 +40,7 @@ jobs:
 
       - name: Trigger synmon
         if: ${{ vars.SYNMON_URL != '' }}
-        run: curl -fsS -X POST "${{ vars.SYNMON_URL }}/trigger" -d "{\"target\":\"https://yoursite.com\"}"
+        run: curl -fsS -X POST "${{ vars.SYNMON_URL }}/trigger" -d "{\"target\":\"http://10.1.92.192:8081/\"}"
 
       - name: Poll validation service
         if: ${{ vars.VALIDATION_URL != '' }}
