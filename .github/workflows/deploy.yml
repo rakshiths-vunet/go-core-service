@@ -1,0 +1,62 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [feature/**]
+
+env:
+  OTELC_VERSION: v1.0.1   # pin to a real tag from opentelemetry-go-compile-instrumentation releases
+
+jobs:
+  build-deploy-verify:
+    runs-on: [self-hosted, go-core-service-vm]
+    concurrency:
+      group: deploy-go-core-service
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch otelc
+        env:
+          GH_TOKEN: ${{ secrets.OTELC_REPO_TOKEN }}
+        run: |
+          gh release download "${OTELC_VERSION}" \
+            --repo rakshiths-vunet/opentelemetry-go-compile-instrumentation \
+            --pattern 'otelc-linux-amd64' \
+            --clobber
+          mv otelc-linux-amd64 otelc
+          chmod +x otelc
+          ./otelc version
+
+      - name: Build
+        run: ./otelc go build -o bin/server ./cmd/server
+
+      - name: Deploy
+        run: /opt/go-core-service/deploy.sh "${{ github.sha }}" "$PWD/bin/server"
+
+      # --- Below steps are stubs until synmon + validation service exist ---
+      # Once ready: set SYNMON_URL / VALIDATION_URL as repo Actions variables
+      # (Settings → Secrets and variables → Actions → Variables) and un-skip.
+
+      - name: Trigger synmon
+        if: ${{ vars.SYNMON_URL != '' }}
+        run: curl -fsS -X POST "${{ vars.SYNMON_URL }}/trigger" -d "{\"target\":\"https://yoursite.com\"}"
+
+      - name: Poll validation service
+        if: ${{ vars.VALIDATION_URL != '' }}
+        run: |
+          for i in $(seq 1 12); do
+            resp=$(curl -fsS -X POST "${{ vars.VALIDATION_URL }}/check" -d "{\"commit\":\"${{ github.sha }}\"}")
+            status=$(echo "$resp" | jq -r '.status')
+            if [ "$status" != "pending" ]; then
+              echo "## Telemetry Validation: $status" >> "$GITHUB_STEP_SUMMARY"
+              echo "$resp" >> "$GITHUB_STEP_SUMMARY"
+              [ "$status" = "pass" ]; exit $?
+            fi
+            sleep 10
+          done
+          echo "validation timed out"; exit 1
+
+      - name: Synmon/validation not configured
+        if: ${{ vars.SYNMON_URL == '' || vars.VALIDATION_URL == '' }}
+        run: echo "::warning::synmon/validation URLs not set — deploy succeeded but telemetry was NOT verified"
