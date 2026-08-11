@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package core;
+
+option go_package = "go-core-service/internal/corepb";
+
+service Core {
+  rpc ItemLookup (ItemRequest) returns (ItemResponse);
+}
+
+message ItemRequest {
+  string item = 1;
+}
+
+message ItemResponse {
+  string status = 1;
+}

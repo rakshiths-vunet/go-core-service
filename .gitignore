@@ -1,0 +1,4 @@
+.otelc-build/
+bin/
+grpc-test
+*.log
