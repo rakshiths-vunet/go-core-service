@@ -34,28 +34,30 @@ jobs:
       - name: Deploy
         run: /opt/go-core-service/deploy.sh "${{ github.sha }}" "$PWD/bin/server"
 
-      # --- Below steps are stubs until synmon + validation service exist ---
-      # Once ready: set SYNMON_URL / VALIDATION_URL as repo Actions variables
-      # (Settings → Secrets and variables → Actions → Variables) and un-skip.
-
       - name: Trigger synmon
         if: ${{ vars.SYNMON_URL != '' }}
         run: curl -fsS -X POST "${{ vars.SYNMON_URL }}/trigger" -d "{\"target\":\"http://10.1.92.192:8081/\"}"
 
-      - name: Poll validation service
+      # otelkmap's /validate is a single blocking call — it starts a run,
+      # waits up to waitSeconds for matching Kafka telemetry, and returns
+      # one pass/fail/no_data verdict. No polling loop needed.
+      #
+      # no_data is treated as a CI failure here (not just a warning): for a
+      # deploy gate, "nothing arrived to check" is as unverified as a real
+      # failure, even though otelkmap's own docs don't call it one.
+      - name: Validate telemetry fields
         if: ${{ vars.VALIDATION_URL != '' }}
         run: |
-          for i in $(seq 1 12); do
-            resp=$(curl -fsS -X POST "${{ vars.VALIDATION_URL }}/check" -d "{\"commit\":\"${{ github.sha }}\"}")
-            status=$(echo "$resp" | jq -r '.status')
-            if [ "$status" != "pending" ]; then
-              echo "## Telemetry Validation: $status" >> "$GITHUB_STEP_SUMMARY"
-              echo "$resp" >> "$GITHUB_STEP_SUMMARY"
-              [ "$status" = "pass" ]; exit $?
-            fi
-            sleep 10
-          done
-          echo "validation timed out"; exit 1
+          resp=$(curl -fsS -X POST "${{ vars.VALIDATION_URL }}/validate" -d '{"waitSeconds":60}')
+          status=$(echo "$resp" | jq -r '.status')
+          echo "## Telemetry Validation: $status" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo "$resp" | jq . >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" != "pass" ]; then
+            echo "::error::telemetry validation status=$status — see step summary for missing_fields"
+            exit 1
+          fi
 
       - name: Synmon/validation not configured
         if: ${{ vars.SYNMON_URL == '' || vars.VALIDATION_URL == '' }}
