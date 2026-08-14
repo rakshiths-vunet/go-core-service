@@ -3,9 +3,14 @@ name: Build and Deploy
 on:
   push:
     branches: [feature/**]
+  repository_dispatch:
+    types: [otelc-build]
 
 env:
-  OTELC_VERSION: v1.0.1   # pin to a real tag from opentelemetry-go-compile-instrumentation releases
+  # On a normal feature/** push: falls back to the pinned tag from rakshith's fork.
+  # On a repository_dispatch from an otelc repo: uses the version/repo sent in the payload.
+  OTELC_VERSION: ${{ github.event.client_payload.otelc_version || 'v1.0.1' }}
+  OTELC_REPO: ${{ github.event.client_payload.otelc_repo || 'rakshiths-vunet/opentelemetry-go-compile-instrumentation' }}
 
 jobs:
   build-deploy-verify:
@@ -18,10 +23,10 @@ jobs:
 
       - name: Fetch otelc
         env:
-          GH_TOKEN: ${{ secrets.OTELC_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.OTELC_REPO_TOKEN_2 }}
         run: |
           gh release download "${OTELC_VERSION}" \
-            --repo rakshiths-vunet/opentelemetry-go-compile-instrumentation \
+            --repo "${OTELC_REPO}" \
             --pattern 'otelc-linux-amd64' \
             --clobber
           mv otelc-linux-amd64 otelc
