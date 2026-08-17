@@ -1,3 +1,7 @@
+// proto/core.proto
+// Protocol Buffers definition for the Core service interface.
+// Defines the Core gRPC service, its ItemLookup method, and the ItemRequest/ItemResponse message types.
+// This file is used as the source for generating Go gRPC code using protoc.
 syntax = "proto3";
 
 package core;

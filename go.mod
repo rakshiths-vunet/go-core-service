@@ -1,3 +1,7 @@
+// go.mod
+// This file defines the Go module path, dependency requirements, and module-level configuration
+// for the go-core-service. It tracks direct dependencies like Gin, logrus, gRPC, and Protobuf,
+// along with their transitive dependencies.
 module go-core-service
 
 go 1.26.5

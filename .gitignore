@@ -1,3 +1,6 @@
+# .gitignore
+# Specifies intentionally untracked files and directories that Git should ignore,
+# such as compiled binaries (bin/, grpc-test), temporary build directories (.otelc-build/), and log files.
 .otelc-build/
 bin/
 grpc-test

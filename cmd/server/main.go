@@ -1,3 +1,15 @@
+// Package main provides the entry point for the go-core-service application.
+//
+// This file initializes and starts:
+// 1. A gRPC server (port 9090) registering the CoreServer service for item lookups.
+// 2. An HTTP server (port 8090) exposing a health check endpoint (/healthz) and a Gin-based API (/api/orders).
+//
+// The /api/orders endpoint acts as a middle-tier coordinator:
+// - Receives incoming JSON order requests.
+// - Logs request details using both log/slog and logrus.
+// - Performs a loopback gRPC call to ItemLookup.
+// - Forwards the request downstream to the Java order service (java-order-service).
+// - Aggregates and returns the combined response to the caller.
 package main
 
 import (
@@ -16,6 +28,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"go-core-service/internal/corepb"
+	"go-core-service/internal/journey"
 	"go-core-service/internal/server"
 )
 
@@ -23,6 +36,18 @@ const (
 	httpAddr = ":8090"
 	grpcAddr = ":9090"
 )
+
+func listenAddrs() (httpAddr, grpcAddr string) {
+	httpAddr = os.Getenv("HTTP_ADDR")
+	if httpAddr == "" {
+		httpAddr = ":8090"
+	}
+	grpcAddr = os.Getenv("GRPC_ADDR")
+	if grpcAddr == "" {
+		grpcAddr = ":9090"
+	}
+	return httpAddr, grpcAddr
+}
 
 type orderRequest struct {
 	Item string `json:"item"`
@@ -47,8 +72,28 @@ func corsMiddleware(c *gin.Context) {
 	c.Next()
 }
 
+// journeyAuthMiddleware optionally gates the journey control endpoints behind a
+// shared token. It is disabled entirely unless JOURNEY_API_TOKEN is set.
+func journeyAuthMiddleware() gin.HandlerFunc {
+	token := os.Getenv("JOURNEY_API_TOKEN")
+	return func(c *gin.Context) {
+		if token == "" {
+			c.Next()
+			return
+		}
+		if c.GetHeader("Authorization") != "Bearer "+token &&
+			c.GetHeader("X-Journey-Token") != token {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
+
+	httpAddr, grpcAddr := listenAddrs()
 
 	grpcServer := grpc.NewServer()
 	corepb.RegisterCoreServer(grpcServer, &server.CoreServer{})
@@ -75,6 +120,45 @@ func main() {
 	gin.SetMode(gin.ReleaseMode)
 	ginEngine := gin.New()
 	ginEngine.Use(gin.Recovery(), corsMiddleware)
+
+	journeyManager := journey.New()
+	journeyRoutes := ginEngine.Group("/api/journey")
+	journeyRoutes.Use(journeyAuthMiddleware())
+	journeyRoutes.GET("/status", func(c *gin.Context) {
+		c.JSON(http.StatusOK, journeyManager.Status())
+	})
+	journeyRoutes.POST("/start", func(c *gin.Context) {
+		var params journey.Params
+		_ = c.ShouldBindJSON(&params)
+		st, err := journeyManager.Start(params)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, st)
+	})
+	journeyRoutes.POST("/stop", func(c *gin.Context) {
+		st, err := journeyManager.Stop()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, st)
+	})
+	// CI hook: matches the deploy.yml "Trigger synmon" stub
+	// ($SYNMON_URL/trigger with body {"target": "..."}).
+	journeyRoutes.POST("/trigger", func(c *gin.Context) {
+		var req struct {
+			Target string `json:"target"`
+		}
+		_ = c.ShouldBindJSON(&req)
+		st, err := journeyManager.Start(journey.Params{TargetURL: req.Target})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, st)
+	})
 
 	ginEngine.POST("/api/orders", func(c *gin.Context) {
 		var req orderRequest

@@ -1,3 +1,8 @@
+// Package server implements the gRPC service handlers defined in the protobuf schemas.
+//
+// This file provides the concrete implementation of the corepb.CoreServer interface.
+// Its CoreServer struct handles incoming gRPC requests such as ItemLookup, executing service-level
+// operations and returning protobuf-defined responses.
 package server
 
 import (
