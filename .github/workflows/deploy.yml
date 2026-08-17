@@ -50,17 +50,76 @@ jobs:
       # no_data is treated as a CI failure here (not just a warning): for a
       # deploy gate, "nothing arrived to check" is as unverified as a real
       # failure, even though otelkmap's own docs don't call it one.
+      #
+      # "module": "GRPC" tells otelkmap which module this deploy actually
+      # exercises. VALIDATION_URL's domain (D04) also covers RMI, SPRINGRMI,
+      # GWT, and ARMERIAGRPC — without naming the target module, telemetry
+      # otelkmap happens to see for any of those (or the total absence of
+      # it) could otherwise flip this deploy gate to fail/no_data for
+      # reasons that have nothing to do with go-core-service's own gRPC
+      # traffic. Only GRPC's own result can fail this check; the sibling
+      # modules are still reported for visibility, purely informational.
+      # See otelkmap's runstore.Diff (targetModule) for the underlying
+      # logic — this workflow doesn't reimplement any of that, it only
+      # asks for it and renders what comes back.
       - name: Validate telemetry fields
         if: ${{ vars.VALIDATION_URL != '' }}
         run: |
-          resp=$(curl -fsS -X POST "${{ vars.VALIDATION_URL }}/validate" -d '{"waitSeconds":60}')
+          resp=$(curl -fsS -X POST "${{ vars.VALIDATION_URL }}/validate" -d '{"waitSeconds":60,"module":"GRPC"}')
           status=$(echo "$resp" | jq -r '.status')
-          echo "## Telemetry Validation: $status" >> "$GITHUB_STEP_SUMMARY"
-          echo '```json' >> "$GITHUB_STEP_SUMMARY"
-          echo "$resp" | jq . >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          domain=$(echo "$resp" | jq -r '.domain')
+
+          icon() {
+            exercised="$1"; mod_status="$2"
+            if [ "$exercised" = "true" ]; then
+              case "$mod_status" in
+                pass) echo "✅" ;;
+                no_data) echo "❓" ;;
+                *) echo "❌" ;;
+              esac
+            else
+              [ "$mod_status" = "pass" ] && echo "✅" || echo "❓"
+            fi
+          }
+
+          {
+            echo "## Telemetry Validation — domain \`$domain\`: $(icon true "$status") $status"
+            echo
+
+            module_count=$(echo "$resp" | jq '.modules | length')
+            for i in $(seq 0 $((module_count - 1))); do
+              mod=$(echo "$resp" | jq -c ".modules[$i]")
+              mod_id=$(echo "$mod" | jq -r '.module')
+              mod_status=$(echo "$mod" | jq -r '.status')
+              mod_exercised=$(echo "$mod" | jq -r '.exercised')
+              met=$(echo "$mod" | jq -r '.required_met')
+              total=$(echo "$mod" | jq -r '.required_total')
+
+              echo "### $mod_id$([ "$mod_exercised" = "true" ] || echo " _(not exercised by this deploy)_")"
+              echo
+              if [ "$mod_status" = "no_data" ]; then
+                echo "$(icon "$mod_exercised" "$mod_status") no data — 0/$total fields verifiable"
+              elif [ "$mod_exercised" = "true" ]; then
+                echo "$(icon "$mod_exercised" "$mod_status") $mod_status — $met/$total required fields present"
+              else
+                echo "❓ partial data — $met/$total required fields present"
+              fi
+              echo
+              echo "| Field | Found |"
+              echo "|---|---|"
+              if [ "$mod_status" = "no_data" ]; then
+                echo "$mod" | jq -r '.required_fields[] | "| \(.) | ❓ no matching telemetry |"'
+              elif [ "$mod_exercised" = "true" ]; then
+                echo "$mod" | jq -r '.required_fields[] as $f | "| \($f) | \(if (.passed_fields | index($f)) then "✅ yes" else "❌ **missing**" end) |"'
+              else
+                echo "$mod" | jq -r '.required_fields[] as $f | "| \($f) | \(if (.passed_fields | index($f)) then "✅ yes" else "❓ no matching telemetry" end) |"'
+              fi
+              echo
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
           if [ "$status" != "pass" ]; then
-            echo "::error::telemetry validation status=$status — see step summary for missing_fields"
+            echo "::error::telemetry validation status=$status (module=GRPC) — see step summary for missing_fields"
             exit 1
           fi
 
