@@ -37,7 +37,7 @@ jobs:
         run: ./otelc go build -o bin/server ./cmd/server
 
       - name: Deploy
-        run: /opt/go-core-service/deploy.sh "${{ github.sha }}" "$PWD/bin/server"
+        run: /opt/go-core-service/deploy.sh "${{ github.event.client_payload.otelc_version || github.sha }}" "$PWD/bin/server"
 
       - name: Trigger synmon
         if: ${{ vars.SYNMON_URL != '' }}
